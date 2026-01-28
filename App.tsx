@@ -1,0 +1,811 @@
+
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { 
+  User, 
+  UserRole, 
+  Task, 
+  TaskStatus, 
+  Notification, 
+  Language, 
+  Theme,
+  StatusOrder,
+  SystemActivity 
+} from './types';
+import { MOCK_USERS, TRANSLATIONS, STATUS_COLORS, INITIAL_TASKS } from './constants';
+import { getSmartNotification } from './services/geminiService';
+import { 
+  LayoutDashboard, 
+  CheckSquare, 
+  Users, 
+  LogOut, 
+  Bell, 
+  Plus, 
+  Search, 
+  Calendar, 
+  CheckCircle2,
+  X,
+  Trash2,
+  ChevronLeft,
+  ArrowRight,
+  Lock,
+  ChevronLeftCircle,
+  Workflow, 
+  Sun,
+  Moon,
+  AlertTriangle,
+  BarChart2,
+  Check,
+  Layers,
+  ClipboardList,
+  ShieldCheck,
+  Mail,
+  ArrowUpRight,
+  Pencil,
+  Menu,
+  User as UserIcon
+} from 'lucide-react';
+
+// --- Shared UI Components ---
+const Button = ({ children, onClick, variant = 'primary', className = '', type = 'button', disabled = false }: any) => {
+  const variants: any = {
+    primary: 'bg-[#10b981] hover:bg-[#059669] text-white shadow-xl shadow-emerald-500/20',
+    secondary: 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50',
+    outline: 'bg-transparent border-2 border-[#10b981] text-[#10b981] hover:bg-emerald-50',
+    danger: 'bg-rose-500 hover:bg-rose-600 text-white',
+    ghost: 'bg-transparent text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
+  };
+  return (
+    <button
+      type={type}
+      disabled={disabled}
+      onClick={onClick}
+      className={`px-8 py-4 rounded-2xl font-bold text-[14px] transition-all flex items-center justify-center gap-3 disabled:opacity-50 ${variants[variant]} ${className}`}
+    >
+      {children}
+    </button>
+  );
+};
+
+export default function App() {
+  const [view, setView] = useState<'landing' | 'login' | 'app'>('landing');
+  const [user, setUser] = useState<User | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [lang, setLang] = useState<Language>('pt');
+  const [theme, setTheme] = useState<Theme>('light');
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [systemActivities, setSystemActivities] = useState<SystemActivity[]>([]);
+  const [taskFormDeliveryPreview, setTaskFormDeliveryPreview] = useState('');
+  const [isAppSidebarOpen, setAppSidebarOpen] = useState(false);
+  const [uploadingAvatarFor, setUploadingAvatarFor] = useState<string | null>(null);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [isAddUserOpen, setIsAddUserOpen] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  const t = TRANSLATIONS[lang];
+
+  useEffect(() => {
+    const savedTasks = JSON.parse(localStorage.getItem('gestora_tasks') || JSON.stringify(INITIAL_TASKS));
+    const savedUsers = JSON.parse(localStorage.getItem('gestora_users') || JSON.stringify(MOCK_USERS));
+    const savedActivities = JSON.parse(localStorage.getItem('gestora_activities') || '[]');
+    setTasks(savedTasks);
+    setUsers(savedUsers);
+    setSystemActivities(savedActivities);
+  }, []);
+
+  useEffect(() => {
+    if (theme === 'dark') document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
+  }, [theme]);
+
+  useEffect(() => {
+    if (editingTaskId) {
+      const t = tasks.find(x => x.id === editingTaskId);
+      if (t) setTaskFormDeliveryPreview(new Date(t.deliveryDate).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }));
+    } else setTaskFormDeliveryPreview('');
+  }, [editingTaskId, tasks]);
+
+  const saveTasks = (newTasks: Task[]) => {
+    setTasks(newTasks);
+    localStorage.setItem('gestora_tasks', JSON.stringify(newTasks));
+  };
+
+  const saveUsers = (newUsers: User[]) => {
+    setUsers(newUsers);
+    localStorage.setItem('gestora_users', JSON.stringify(newUsers));
+  };
+
+  const handleDeleteTask = (task: Task) => {
+    addSystemActivity({ userId: user!.id, userName: user!.name, action: 'deleted', entityType: 'task', entityId: task.id, entityTitle: task.title });
+    saveTasks(tasks.filter(t => t.id !== task.id));
+  };
+
+  const recalcDelivery = (form: HTMLFormElement) => {
+    const start = (form?.elements.namedItem('startDate') as HTMLInputElement)?.value;
+    const val = (form?.elements.namedItem('deadlineValue') as HTMLInputElement)?.value;
+    const type = (form?.elements.namedItem('deadlineType') as HTMLSelectElement)?.value;
+    if (start && val && type) {
+      const d = new Date(start);
+      if (type === 'days') d.setDate(d.getDate() + Number(val));
+      else d.setHours(d.getHours() + Number(val));
+      setTaskFormDeliveryPreview(d.toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }));
+    } else setTaskFormDeliveryPreview('');
+  };
+
+  const handleAdvanceStatus = async (task: Task) => {
+    const currentIndex = StatusOrder.indexOf(task.status);
+    const nextStatus = StatusOrder[currentIndex + 1];
+    if (task.status === TaskStatus.TERMINADO && user?.role !== UserRole.ADMIN) return;
+    if (!nextStatus) return;
+
+    const updatedTasks = tasks.map(tk => tk.id === task.id ? { 
+      ...tk, 
+      status: nextStatus, 
+      updatedAt: new Date().toISOString(),
+      closedAt: nextStatus === TaskStatus.FECHADO ? new Date().toISOString() : tk.closedAt
+    } : tk);
+    
+    saveTasks(updatedTasks);
+    addSystemActivity({ userId: user!.id, userName: user!.name, action: 'status_changed', entityType: 'task', entityId: task.id, entityTitle: task.title, fromStatus: task.status, toStatus: nextStatus });
+    const aiMsg = await getSmartNotification(task.title, nextStatus, false, false, lang);
+    addNotification(task.responsibleId, aiMsg, nextStatus === TaskStatus.TERMINADO ? 'success' : 'info');
+  };
+
+  const addNotification = async (userId: string, message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    const n: Notification = {
+      id: Math.random().toString(36).substr(2, 9),
+      userId,
+      message,
+      type,
+      timestamp: new Date().toISOString(),
+      isRead: false
+    };
+    setNotifications(prev => [n, ...prev]);
+  };
+
+  const addSystemActivity = (a: Omit<SystemActivity, 'id' | 'timestamp'>) => {
+    const full: SystemActivity = { ...a, id: 'A-' + Math.random().toString(36).substr(2, 9), timestamp: new Date().toISOString() };
+    setSystemActivities(prev => {
+      const next = [full, ...prev].slice(0, 200);
+      localStorage.setItem('gestora_activities', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const getUserName = (id: string) => users.find(u => u.id === id)?.name || id;
+
+  const getAvatarUrl = (u: User) => {
+    if (typeof localStorage === 'undefined') return null;
+    return localStorage.getItem(`gestora_avatar_${u.id}`);
+  };
+  const saveAvatar = (userId: string, dataUrl: string) => {
+    localStorage.setItem(`gestora_avatar_${userId}`, dataUrl);
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, avatar: dataUrl } : u));
+  };
+
+  const openAvatarUpload = (userId: string) => {
+    setUploadingAvatarFor(userId);
+    setTimeout(() => avatarInputRef.current?.click(), 0);
+  };
+
+  const filteredTasks = useMemo(() => {
+    let result = tasks;
+    if (searchQuery) result = result.filter(tk => tk.title.toLowerCase().includes(searchQuery.toLowerCase()));
+    if (statusFilter !== 'all') result = result.filter(tk => tk.status === statusFilter);
+    if (user?.role === UserRole.EMPLOYEE) {
+      result = result.filter(tk => tk.responsibleId === user.id || tk.intervenientes?.includes(user.id));
+    }
+    return result;
+  }, [tasks, searchQuery, statusFilter, user]);
+
+  const stats = useMemo(() => ({
+    active: tasks.filter(t => t.status !== TaskStatus.FECHADO).length,
+    overdue: tasks.filter(t => t.status === TaskStatus.ATRASADA).length,
+    completed: tasks.filter(t => t.status === TaskStatus.FECHADO).length
+  }), [tasks]);
+
+  const LoginPage = () => (
+    <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-6 font-sans relative overflow-hidden">
+      {/* Background abstract elements */}
+      <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-emerald-900/20 rounded-full blur-[160px]"></div>
+      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-emerald-800/10 rounded-full blur-[140px]"></div>
+      
+      <div className="w-full max-w-[500px] relative z-10 animate-in">
+        <div className="text-center mb-12">
+          <div className="inline-flex p-4 bg-emerald-500 rounded-3xl shadow-2xl shadow-emerald-500/30 mb-6 transform hover:rotate-6 transition-transform">
+             <Workflow size={40} className="text-white"/>
+          </div>
+          <h1 className="text-white text-5xl font-black tracking-tighter uppercase mb-2">GESTORA</h1>
+          <p className="text-slate-400 font-bold uppercase tracking-[0.3em] text-[10px]">Professional Workflow Management</p>
+        </div>
+
+        <div className="bg-white/10 backdrop-blur-2xl border border-white/10 p-10 lg:p-12 rounded-[3.5rem] shadow-[0_40px_80px_-20px_rgba(0,0,0,0.5)]">
+          <form className="space-y-8" onSubmit={(e) => {
+            e.preventDefault();
+            const email = (e.target as any).email.value;
+            const found = users.find(u => u.email === email);
+            if (found) { setUser(found); setView('app'); }
+            else alert('Acesso negado. Credenciais inválidas.');
+          }}>
+            <div className="space-y-3">
+              <label className="text-[11px] font-black uppercase text-emerald-400 tracking-widest ml-1">E-mail Corporativo</label>
+              <div className="relative group">
+                <input name="email" type="email" placeholder="nome@empresa.com" className="w-full pl-14 pr-6 py-5 bg-white/5 border border-white/10 focus:border-emerald-500 text-white rounded-2xl outline-none transition-all font-bold placeholder:text-slate-500" required />
+                <Mail className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-500 transition-colors" size={20} />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex justify-between items-center ml-1">
+                 <label className="text-[11px] font-black uppercase text-emerald-400 tracking-widest">Código de Acesso</label>
+                 <button type="button" className="text-[11px] font-bold text-slate-400 hover:text-emerald-400">Recuperar?</button>
+              </div>
+              <div className="relative group">
+                <input name="password" type="password" placeholder="••••••••" className="w-full pl-14 pr-6 py-5 bg-white/5 border border-white/10 focus:border-emerald-500 text-white rounded-2xl outline-none transition-all font-bold placeholder:text-slate-500" required />
+                <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-500 transition-colors" size={20} />
+              </div>
+            </div>
+
+            <Button type="submit" className="w-full py-6 rounded-2xl text-[16px] uppercase tracking-widest shadow-2xl">
+              Autenticar Agora
+            </Button>
+          </form>
+
+          <div className="mt-12 flex items-center justify-center gap-4">
+             <div className="h-px bg-white/5 flex-1"></div>
+             <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest">Segurança ILUNGI</p>
+             <div className="h-px bg-white/5 flex-1"></div>
+          </div>
+        </div>
+
+        <div className="mt-10 text-center">
+           <button onClick={() => setView('landing')} className="text-slate-500 hover:text-white transition-colors text-sm font-bold flex items-center justify-center gap-2 mx-auto uppercase tracking-widest">
+              <ChevronLeft size={16}/> Sair do Portal
+           </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const LandingPage = () => (
+    <div className="min-h-screen bg-white font-sans flex flex-col">
+      <nav className="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-xl z-[100] border-b border-slate-200/60 h-16 sm:h-[72px]">
+        <div className="max-w-6xl mx-auto px-5 sm:px-8 h-full flex items-center justify-between">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('landing')}>
+            <div className="w-9 h-9 rounded-lg bg-slate-900 flex items-center justify-center">
+              <Workflow className="text-white" size={18} />
+            </div>
+            <span className="text-[15px] sm:text-base font-semibold text-slate-900 tracking-tight">GESTORA</span>
+          </div>
+          <div className="flex items-center gap-2 sm:gap-4">
+            <button onClick={() => setView('landing')} className="text-[13px] sm:text-sm font-medium text-slate-600 hover:text-slate-900 px-3 py-2 rounded-lg hover:bg-slate-100/80 transition-colors">
+              Início
+            </button>
+            <button onClick={() => setView('login')} className="text-[13px] sm:text-sm font-medium text-white bg-slate-900 hover:bg-slate-800 px-4 sm:px-5 py-2 sm:py-2.5 rounded-lg transition-colors shadow-sm">
+              Entrar
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      <section className="pt-32 sm:pt-40 md:pt-48 lg:pt-64 pb-32 sm:pb-40 md:pb-56 px-4 sm:px-6 lg:px-8 text-center max-w-6xl mx-auto space-y-8 sm:space-y-12">
+        <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-[76px] font-black text-slate-800 leading-[1.05] tracking-tight animate-in">
+          {t.landingTitle.split(' simples e eficaz')[0]} <span className="text-[#10b981]">simples</span> e <span className="text-[#10b981]">eficaz</span>
+        </h1>
+        <p className="text-base sm:text-lg lg:text-[20px] text-slate-500 max-w-3xl mx-auto font-medium animate-in leading-relaxed px-2">
+          {t.landingDesc}
+        </p>
+        <div className="flex flex-col sm:flex-row gap-4 sm:gap-5 justify-center items-center pt-6 sm:pt-8 animate-in">
+          {/* Design do antigo Ver Roadmap: borda, ícone seta, hover */}
+          <button onClick={() => setView('login')} className="flex items-center justify-center gap-2 px-10 sm:px-14 py-4 sm:py-5 rounded-full border-2 border-[#10b981] text-[#10b981] font-bold hover:bg-[#10b981] hover:text-white transition-all text-base group w-full sm:w-auto">
+            Começar Agora <ArrowUpRight size={20} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+          </button>
+        </div>
+      </section>
+
+      <footer className="bg-slate-950 text-white py-14 px-8">
+        <div className="max-w-6xl mx-auto flex flex-col items-center gap-5">
+          <div className="flex items-center gap-2.5 text-slate-400">
+            <Workflow size={18} />
+            <span className="text-sm font-semibold tracking-tight">GESTORA</span>
+          </div>
+          <p className="text-slate-500 text-xs tracking-wide">
+            © 2026 ILUNGI GESTORA
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+
+  if (view === 'landing') return <LandingPage />;
+  if (view === 'login') return <LoginPage />;
+
+  return (
+    <div className="h-screen flex bg-[#f8fafc] dark:bg-slate-950 transition-all font-sans overflow-hidden">
+      <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+        const f = e.target.files?.[0];
+        if (f && uploadingAvatarFor) { const r = new FileReader(); r.onload = () => { saveAvatar(uploadingAvatarFor, r.result as string); setUploadingAvatarFor(null); }; r.readAsDataURL(f); }
+        e.target.value = '';
+      }} />
+      
+      {isAppSidebarOpen && <div className="fixed inset-0 bg-slate-900/40 z-[75] lg:hidden" onClick={() => setAppSidebarOpen(false)} aria-hidden="true" />}
+      
+      {/* Sidebar - altura total (toda a vertical); em mobile drawer */}
+      <aside className={`fixed lg:relative left-0 top-0 h-screen flex flex-col z-[80] transition-all duration-300 ease-in-out
+        bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800
+        ${isAppSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+        ${isSidebarCollapsed ? 'lg:w-[100px] w-[280px]' : 'w-[280px]'}`}>
+        
+        <div className="p-4 sm:p-6 lg:p-8 flex items-center justify-between">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('landing')}>
+            <div className="bg-[#10b981] p-2 rounded-xl flex-shrink-0 shadow-lg shadow-emerald-500/20"><Workflow size={22} className="text-white" /></div>
+            {!isSidebarCollapsed && <span className="text-xl font-black text-slate-800 dark:text-white uppercase tracking-tighter">GESTORA</span>}
+          </div>
+          <button onClick={() => setAppSidebarOpen(false)} className="lg:hidden p-2 text-slate-400 hover:text-slate-600"><X size={20}/></button>
+        </div>
+
+        <nav className="flex-1 px-4 space-y-2 mt-4 overflow-y-auto">
+          <SidebarNavItem icon={<LayoutDashboard size={20}/>} label={t.dashboard} active={activeTab === 'dashboard'} collapsed={isSidebarCollapsed} onClick={() => { setActiveTab('dashboard'); setAppSidebarOpen(false); }} />
+          <SidebarNavItem icon={<CheckSquare size={20}/>} label={t.tasks} active={activeTab === 'tasks'} collapsed={isSidebarCollapsed} onClick={() => { setActiveTab('tasks'); setAppSidebarOpen(false); }} />
+          {user?.role === UserRole.ADMIN && (
+            <>
+              <SidebarNavItem icon={<Users size={20}/>} label={t.users} active={activeTab === 'users'} collapsed={isSidebarCollapsed} onClick={() => { setActiveTab('users'); setAppSidebarOpen(false); }} />
+              <SidebarNavItem icon={<BarChart2 size={20}/>} label={t.reports} active={activeTab === 'reports'} collapsed={isSidebarCollapsed} onClick={() => { setActiveTab('reports'); setAppSidebarOpen(false); }} />
+            </>
+          )}
+          <SidebarNavItem icon={<UserIcon size={20}/>} label={t.profile} active={activeTab === 'profile'} collapsed={isSidebarCollapsed} onClick={() => { setActiveTab('profile'); setAppSidebarOpen(false); }} />
+        </nav>
+
+        <div className="p-4 lg:p-6 border-t border-slate-100 dark:border-slate-800">
+          <button onClick={() => { setUser(null); setView('login'); }} className="flex items-center gap-5 w-full px-5 py-4 text-slate-400 hover:text-rose-500 transition-all">
+            <LogOut size={20} />
+            {!isSidebarCollapsed && <span className="text-[11px] font-black uppercase tracking-widest">{t.logout}</span>}
+          </button>
+        </div>
+      </aside>
+
+      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+        <header className="h-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-10 flex items-center justify-between z-50">
+           <div className="flex items-center gap-3 sm:gap-6">
+              <button onClick={() => setAppSidebarOpen(true)} className="lg:hidden p-3 bg-emerald-50 dark:bg-emerald-900/20 text-[#10b981] rounded-xl"><Menu size={22}/></button>
+              <button onClick={() => setSidebarCollapsed(!isSidebarCollapsed)} className="hidden lg:flex p-3 bg-emerald-50 dark:bg-emerald-900/20 text-[#10b981] rounded-xl">
+                 <ChevronLeftCircle size={22} className={`transition-transform duration-500 ${isSidebarCollapsed ? 'rotate-180' : ''}`} />
+              </button>
+              <div>
+                 <h2 className="text-xl font-black text-slate-900 dark:text-white leading-none capitalize tracking-tight">{t[activeTab as keyof typeof t] || activeTab}</h2>
+                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Gestora Enterprise Workspace</p>
+              </div>
+           </div>
+
+           <div className="flex items-center gap-6">
+              <button onClick={() => setLang(lang === 'pt' ? 'en' : 'pt')} className="text-[10px] font-black p-2 bg-slate-50 dark:bg-slate-800 rounded-lg uppercase tracking-widest">{lang}</button>
+              <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-3 text-slate-400">{theme === 'light' ? <Moon size={20}/> : <Sun size={20}/>}</button>
+              <div className="flex items-center gap-3 sm:gap-4 pl-4 sm:pl-6 border-l border-slate-100 dark:border-slate-800">
+                 <div className="text-right hidden sm:block">
+                    <p className="text-sm font-black text-slate-900 dark:text-white leading-none">{user!.name}</p>
+                    <p className="text-[10px] font-bold text-[#10b981] uppercase tracking-widest mt-1.5">{user!.position}</p>
+                 </div>
+                 <button type="button" onClick={() => openAvatarUpload(user!.id)} className="flex-shrink-0 rounded-2xl border-2 border-white dark:border-slate-800 shadow-xl overflow-hidden w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-slate-100 dark:bg-slate-800 ring-1 ring-slate-100">
+                   {getAvatarUrl(user!) ? <img src={getAvatarUrl(user!)!} alt="" className="w-full h-full object-cover" /> : <UserIcon size={22} className="text-slate-400" />}
+                 </button>
+              </div>
+           </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 bg-[#f8fafc] dark:bg-slate-950">
+          
+          {activeTab === 'dashboard' && (
+            <div className="max-w-7xl mx-auto space-y-8 sm:space-y-12 animate-in">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
+                 <StatCard icon={<Layers className="text-emerald-600" />} label={t.activeTasks} value={stats.active} color="emerald" />
+                 <StatCard icon={<AlertTriangle className="text-rose-600" />} label={t.overdueTasks} value={stats.overdue} color="rose" />
+                 <StatCard icon={<CheckCircle2 className="text-emerald-600" />} label={t.completedTasks} value={stats.completed} color="emerald" />
+              </div>
+              {/* Relatório breve: tarefas por estado */}
+              <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-[3rem] p-6 sm:p-8 lg:p-10 border border-slate-100 dark:border-slate-800 shadow-sm">
+                <h3 className="text-lg sm:text-xl font-black mb-6 tracking-tight">Tarefas por Estado</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 sm:gap-4">
+                  {Object.values(TaskStatus).map(s => (
+                    <div key={s} className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 sm:p-4 text-center">
+                      <p className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">{tasks.filter(t=>t.status===s).length}</p>
+                      <p className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase mt-1 line-clamp-2">{s}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Atividades recentes do sistema: quem alterou o quê */}
+              <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-[3rem] p-6 sm:p-8 lg:p-12 border border-slate-100 dark:border-slate-800 shadow-sm">
+                <h3 className="text-lg sm:text-2xl font-black mb-6 sm:mb-10 tracking-tight">{t.latestUpdates}</h3>
+                <div className="space-y-4 sm:space-y-6 max-h-[420px] overflow-y-auto pr-2">
+                  {systemActivities.slice(0, 15).map(a => (
+                    <div key={a.id} className="flex gap-3 sm:gap-6 items-start border-b border-slate-50 dark:border-slate-800 pb-4 last:border-0">
+                      <div className="p-2.5 sm:p-4 rounded-xl shrink-0 bg-emerald-50 dark:bg-emerald-900/20 text-[#10b981]"><Bell size={18} className="sm:w-5 sm:h-5"/></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-700 dark:text-slate-300 text-sm sm:text-base">
+                          {a.action === 'created' && <><span className="text-[#10b981]">{a.userName}</span> criou a tarefa «{a.entityTitle}»</>}
+                          {a.action === 'updated' && <><span className="text-[#10b981]">{a.userName}</span> editou a tarefa «{a.entityTitle}»</>}
+                          {a.action === 'deleted' && <><span className="text-rose-600">{a.userName}</span> eliminou a tarefa «{a.entityTitle}»</>}
+                          {a.action === 'status_changed' && <><span className="text-[#10b981]">{a.userName}</span> alterou «{a.entityTitle}» de {a.fromStatus} → {a.toStatus}</>}
+                        </p>
+                        <p className="text-[10px] font-black uppercase text-slate-400 mt-1">{new Date(a.timestamp).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {systemActivities.length === 0 && <p className="text-slate-400 font-bold uppercase tracking-widest text-center py-10">Nenhuma atividade registada.</p>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'tasks' && (
+            <div className="max-w-7xl mx-auto space-y-10 animate-in">
+              <div className="flex flex-col lg:flex-row items-center justify-between gap-6">
+                 <div className="flex gap-4 w-full lg:w-auto">
+                    <div className="relative flex-1 lg:flex-initial">
+                       <input 
+                         placeholder={t.search} 
+                         value={searchQuery}
+                         onChange={e => setSearchQuery(e.target.value)}
+                         className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 pl-12 pr-6 py-4 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/5 transition-all w-full lg:min-w-[400px] font-bold text-sm shadow-sm"
+                       />
+                       <Search className="absolute left-4 top-4.5 text-slate-300" size={18} />
+                    </div>
+                    <select 
+                      value={statusFilter}
+                      onChange={e => setStatusFilter(e.target.value)}
+                      className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 px-6 py-4 rounded-2xl font-bold text-[10px] uppercase tracking-widest text-slate-500 outline-none cursor-pointer shadow-sm"
+                    >
+                       <option value="all">{t.allStatuses}</option>
+                       {Object.values(TaskStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                 </div>
+                 {user?.role === UserRole.ADMIN && (
+                   <Button onClick={() => { setEditingTaskId(null); setIsTaskModalOpen(true); }} className="px-6 sm:px-10 py-4 sm:py-5 rounded-2xl shadow-xl shadow-emerald-500/20 bg-[#10b981]"><Plus size={18} className="sm:w-5 sm:h-5"/> {t.createTask}</Button>
+                 )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
+                {filteredTasks.length > 0 ? filteredTasks.map(tk => (
+                  <TaskCard 
+                    key={tk.id} 
+                    task={tk} 
+                    user={user!} 
+                    users={users}
+                    onAdvance={() => handleAdvanceStatus(tk)} 
+                    onDelete={() => handleDeleteTask(tk)}
+                    onEdit={user?.role === UserRole.ADMIN ? () => { setEditingTaskId(tk.id); setIsTaskModalOpen(true); } : undefined}
+                  />
+                )) : (
+                  <div className="col-span-full py-20 text-center space-y-6">
+                    <ClipboardList size={100} className="mx-auto text-slate-100 dark:text-slate-800" />
+                    <p className="text-slate-400 font-bold uppercase tracking-widest">{t.noTasks}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'users' && user?.role === UserRole.ADMIN && (
+            <div className="max-w-7xl mx-auto space-y-6 sm:space-y-10 animate-in">
+              <div className="flex justify-between items-center">
+                <h3 className="text-xl font-black">Gestão de Utilizadores</h3>
+                <Button onClick={() => setIsAddUserOpen(true)} className="px-6 py-3"><Plus size={18}/> {t.addUser}</Button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                {users.map(u => (
+                  <div key={u.id} className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-100 dark:border-slate-800 shadow-sm flex gap-4">
+                    <button type="button" onClick={() => openAvatarUpload(u.id)} className="flex-shrink-0 w-14 h-14 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center overflow-hidden">
+                      {getAvatarUrl(u) ? <img src={getAvatarUrl(u)!} alt="" className="w-full h-full object-cover" /> : <UserIcon size={28} className="text-slate-400" />}
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-black text-slate-900 dark:text-white truncate">{u.name}</p>
+                      <p className="text-xs text-slate-500 truncate">{u.email}</p>
+                      <p className="text-[10px] font-bold text-[#10b981] uppercase mt-1">{u.position || u.role}</p>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => setEditingUserId(u.id)} className="p-2 rounded-lg text-slate-400 hover:bg-emerald-50 hover:text-[#10b981]"><Pencil size={16}/></button>
+                      <button onClick={() => { if (confirm(t.areYouSure)) saveUsers(users.filter(x => x.id !== u.id)); }} className="p-2 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-500"><Trash2 size={16}/></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'profile' && (
+            <div className="max-w-2xl mx-auto space-y-8 animate-in">
+              <h3 className="text-xl font-black">{t.myProfile}</h3>
+              <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 sm:p-8 border border-slate-100 dark:border-slate-800 shadow-sm">
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.target as HTMLFormElement);
+                  const patch: Partial<User> = { name: fd.get('name') as string, email: fd.get('email') as string };
+                  if (user!.role === UserRole.ADMIN) {
+                    patch.position = fd.get('position') as string;
+                    patch.department = fd.get('department') as string;
+                    patch.role = (fd.get('role') as UserRole) || user!.role;
+                  }
+                  const updated = { ...user!, ...patch };
+                  saveUsers(users.map(u => u.id === user!.id ? updated : u));
+                  setUser(updated);
+                }}>
+                  <div className="flex flex-col sm:flex-row gap-6 mb-8">
+                    <button type="button" onClick={() => openAvatarUpload(user!.id)} className="flex-shrink-0 w-24 h-24 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center overflow-hidden self-center sm:self-start">
+                      {getAvatarUrl(user!) ? <img src={getAvatarUrl(user!)!} alt="" className="w-full h-full object-cover" /> : <UserIcon size={40} className="text-slate-400" />}
+                    </button>
+                    <div className="flex-1 space-y-4">
+                      <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.name}</label><input name="name" defaultValue={user!.name} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" required /></div>
+                      <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.email}</label><input name="email" type="email" defaultValue={user!.email} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" required /></div>
+                      {user!.role === UserRole.ADMIN && (
+                        <>
+                          <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.position}</label><input name="position" defaultValue={user!.position} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" /></div>
+                          <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.department}</label><input name="department" defaultValue={user!.department} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" /></div>
+                          <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Função</label><select name="role" defaultValue={user!.role} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold"><option value={UserRole.EMPLOYEE}>Funcionário</option><option value={UserRole.ADMIN}>Administrador</option></select></div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-3"><Button type="submit" className="flex-1">{t.save}</Button><Button type="button" variant="ghost" onClick={() => setActiveTab('dashboard')}>{t.cancel}</Button></div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'reports' && user?.role === UserRole.ADMIN && (
+            <div className="max-w-7xl mx-auto space-y-6 sm:space-y-10 animate-in">
+              <h3 className="text-xl font-black">Relatório de Cumprimento das Tarefas por Funcionário</h3>
+              <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-x-auto">
+                <table className="w-full min-w-[540px] text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 dark:border-slate-800">
+                      <th className="px-4 sm:px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Funcionário</th>
+                      <th className="px-4 sm:px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Total</th>
+                      <th className="px-4 sm:px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Concluídas</th>
+                      <th className="px-4 sm:px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Em atraso</th>
+                      <th className="px-4 sm:px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Taxa cumprimento</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.filter(u => u.role === UserRole.EMPLOYEE || u.role === UserRole.ADMIN).map(u => {
+                      const myTasks = tasks.filter(t => t.responsibleId === u.id || t.intervenientes?.includes(u.id));
+                      const total = myTasks.length;
+                      const concl = myTasks.filter(t => t.status === TaskStatus.FECHADO).length;
+                      const atraso = myTasks.filter(t => t.status === TaskStatus.ATRASADA).length;
+                      const taxa = total ? Math.round((concl / total) * 100) : 0;
+                      return (
+                        <tr key={u.id} className="border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                          <td className="px-4 sm:px-6 py-4 font-bold text-slate-900 dark:text-white">{u.name}</td>
+                          <td className="px-4 sm:px-6 py-4 text-center font-black">{total}</td>
+                          <td className="px-4 sm:px-6 py-4 text-center text-[#10b981] font-bold">{concl}</td>
+                          <td className="px-4 sm:px-6 py-4 text-center text-rose-500 font-bold">{atraso}</td>
+                          <td className="px-4 sm:px-6 py-4 text-center font-black">{taxa}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Task Create/Edit Modal - em colunas, multi-responsáveis, data entrega auto */}
+      {(isTaskModalOpen || editingTaskId) && (() => {
+        const editTask = editingTaskId ? tasks.find(t => t.id === editingTaskId) : null;
+        const respIds = editTask ? [editTask.responsibleId, ...(editTask.intervenientes || [])] : [];
+        return (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-6 overflow-y-auto py-8 animate-in">
+           <div className="bg-white dark:bg-slate-900 w-full max-w-4xl max-h-[95vh] overflow-y-auto rounded-2xl sm:rounded-[3rem] p-6 sm:p-10 lg:p-14 border border-slate-100 dark:border-slate-800 shadow-2xl relative my-auto">
+              <button onClick={() => { setIsTaskModalOpen(false); setEditingTaskId(null); setTaskFormDeliveryPreview(''); }} className="absolute top-6 right-6 sm:top-8 sm:right-10 p-2 text-slate-300 hover:text-rose-500 transition-colors z-10"><X size={24} className="sm:w-7 sm:h-7"/></button>
+              <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-tighter mb-6 sm:mb-10 uppercase text-slate-800 dark:text-white">{editTask ? 'Editar Tarefa' : 'Nova Atividade'}</h2>
+              <form id="taskForm" className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6" onSubmit={(e) => {
+                e.preventDefault();
+                const fd = new FormData(e.target as HTMLFormElement);
+                const ids = fd.getAll('responsibleIds') as string[];
+                if (!ids || ids.length === 0) { alert('Selecione pelo menos um responsável.'); return; }
+                const start = fd.get('startDate') as string;
+                const val = Number(fd.get('deadlineValue'));
+                const type = (fd.get('deadlineType') as 'days'|'hours') || 'days';
+                const delivery = new Date(start);
+                if (type === 'days') delivery.setDate(delivery.getDate() + val);
+                else delivery.setHours(delivery.getHours() + val);
+
+                if (editTask) {
+                  const updated = tasks.map(t => t.id === editTask.id ? { ...t, title: fd.get('title') as string, description: fd.get('description') as string, startDate: start, deadlineValue: val, deadlineType: type, deliveryDate: delivery.toISOString(), responsibleId: ids[0], intervenientes: ids.slice(1), updatedAt: new Date().toISOString() } : t);
+                  saveTasks(updated);
+                  addSystemActivity({ userId: user!.id, userName: user!.name, action: 'updated', entityType: 'task', entityId: editTask.id, entityTitle: fd.get('title') as string });
+                  setEditingTaskId(null); setIsTaskModalOpen(false);
+                } else {
+                  const newTask: Task = { id: 'T-' + Math.random().toString(36).substr(2, 6).toUpperCase(), title: fd.get('title') as string, description: fd.get('description') as string, startDate: start, deadlineValue: val, deadlineType: type, deliveryDate: delivery.toISOString(), responsibleId: ids[0], intervenientes: ids.slice(1), status: TaskStatus.ABERTO, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                  saveTasks([newTask, ...tasks]);
+                  addSystemActivity({ userId: user!.id, userName: user!.name, action: 'created', entityType: 'task', entityId: newTask.id, entityTitle: newTask.title });
+                  setIsTaskModalOpen(false);
+                }
+                setTaskFormDeliveryPreview('');
+              }}>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">{t.title}</label>
+                  <input name="title" defaultValue={editTask?.title} className="w-full px-4 sm:px-6 py-3 sm:py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl sm:rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 font-bold" required />
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">{t.description}</label>
+                  <textarea name="description" defaultValue={editTask?.description} rows={3} className="w-full px-4 sm:px-6 py-3 sm:py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl sm:rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 font-medium resize-none" required />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">{t.startDate}</label>
+                  <input name="startDate" type="datetime-local" defaultValue={editTask?.startDate?.slice(0,16)} onInput={(e)=>recalcDelivery((e.target as HTMLInputElement).form!)} className="w-full px-4 sm:px-6 py-3 sm:py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl sm:rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 font-bold" required />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Duração (valor + unidade)</label>
+                  <div className="flex gap-2">
+                    <input name="deadlineValue" type="number" defaultValue={editTask?.deadlineValue ?? 1} min={1} onInput={(e)=>recalcDelivery((e.target as HTMLInputElement).form!)} className="flex-1 px-4 sm:px-6 py-3 sm:py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl sm:rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 font-bold" required />
+                    <select name="deadlineType" defaultValue={editTask?.deadlineType} onChange={(e)=>recalcDelivery((e.target as HTMLSelectElement).form!)} className="px-4 sm:px-6 py-3 sm:py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl sm:rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 font-bold">
+                      <option value="days">{t.days}</option>
+                      <option value="hours">{t.hours}</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">{t.deliveryDate} (calculada)</label>
+                  <div className="px-4 sm:px-6 py-3 sm:py-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl sm:rounded-2xl font-bold text-[#10b981]">{taskFormDeliveryPreview || (editTask ? new Date(editTask.deliveryDate).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) : '—')}</div>
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">{t.responsibles} (múltipla escolha)</label>
+                  <div className="flex flex-wrap gap-2 p-3 sm:p-4 bg-slate-50 dark:bg-slate-800 rounded-xl sm:rounded-2xl max-h-32 overflow-y-auto">
+                    {users.map(u => (
+                      <label key={u.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-700 cursor-pointer hover:bg-emerald-50 dark:hover:bg-emerald-900/20">
+                        <input type="checkbox" name="responsibleIds" value={u.id} defaultChecked={respIds.includes(u.id)} className="rounded" />
+                        <span className="text-sm font-bold">{u.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="md:col-span-2 pt-4">
+                  <Button type="submit" className="w-full py-4 sm:py-5 rounded-2xl bg-[#10b981] shadow-emerald-500/20 shadow-xl text-sm sm:text-base uppercase tracking-[0.1em]">{editTask ? 'Guardar alterações' : 'Criar Tarefa'}</Button>
+                </div>
+              </form>
+           </div>
+        </div>
+        );
+      })()}
+
+      {/* Add User Modal */}
+      {isAddUserOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl p-8 border border-slate-100 dark:border-slate-800 shadow-2xl">
+            <h2 className="text-2xl font-black mb-6">Novo Utilizador</h2>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const fd = new FormData(e.target as HTMLFormElement);
+              const newUser: User = { id: 'u-' + Math.random().toString(36).substr(2, 9), name: fd.get('name') as string, email: fd.get('email') as string, role: (fd.get('role') as UserRole) || UserRole.EMPLOYEE, position: (fd.get('position') as string) || '' };
+              saveUsers([...users, newUser]);
+              setIsAddUserOpen(false);
+            }}>
+              <div className="space-y-4">
+                <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.name}</label><input name="name" className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" required /></div>
+                <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.email}</label><input name="email" type="email" className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" required /></div>
+                <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.position}</label><input name="position" className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" /></div>
+                <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Função</label><select name="role" className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold"><option value={UserRole.EMPLOYEE}>Funcionário</option><option value={UserRole.ADMIN}>Administrador</option></select></div>
+              </div>
+              <div className="flex gap-3 mt-6"><Button type="submit" className="flex-1">Adicionar</Button><Button type="button" variant="ghost" onClick={() => setIsAddUserOpen(false)}>{t.cancel}</Button></div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal */}
+      {editingUserId && (() => {
+        const u = users.find(x => x.id === editingUserId);
+        if (!u) return null;
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl p-8 border border-slate-100 dark:border-slate-800 shadow-2xl">
+              <h2 className="text-2xl font-black mb-6">{t.editUser}</h2>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const fd = new FormData(e.target as HTMLFormElement);
+                saveUsers(users.map(x => x.id !== editingUserId ? x : { ...x, name: fd.get('name') as string, email: fd.get('email') as string, position: fd.get('position') as string, role: (fd.get('role') as UserRole) || x.role }));
+                setEditingUserId(null);
+              }}>
+                <div className="space-y-4">
+                  <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.name}</label><input name="name" defaultValue={u.name} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" required /></div>
+                  <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.email}</label><input name="email" type="email" defaultValue={u.email} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" required /></div>
+                  <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">{t.position}</label><input name="position" defaultValue={u.position} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold" /></div>
+                  <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Função</label><select name="role" defaultValue={u.role} className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 font-bold"><option value={UserRole.EMPLOYEE}>Funcionário</option><option value={UserRole.ADMIN}>Administrador</option></select></div>
+                </div>
+                <div className="flex gap-3 mt-6"><Button type="submit" className="flex-1">{t.save}</Button><Button type="button" variant="ghost" onClick={() => setEditingUserId(null)}>{t.cancel}</Button></div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function SidebarNavItem({ icon, label, active, collapsed, onClick }: any) {
+  return (
+    <button onClick={onClick} className={`w-full flex items-center gap-5 px-6 py-4 rounded-2xl transition-all group relative 
+      ${active ? 'bg-[#10b981] text-white shadow-xl shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white'}`}>
+      <div className={`transition-transform duration-300 ${active ? 'scale-110' : 'group-hover:scale-110'}`}>{icon}</div>
+      {!collapsed && <span className="text-[11px] font-black uppercase tracking-widest animate-in font-bold">{label}</span>}
+    </button>
+  );
+}
+
+function StatCard({ icon, label, value, color }: any) {
+  const bgColors: any = { emerald: 'bg-emerald-50 dark:bg-emerald-900/10', rose: 'bg-rose-50 dark:bg-rose-900/10' };
+  return (
+    <div className="bg-white dark:bg-slate-900 p-8 rounded-[3.5rem] border border-slate-100 dark:border-slate-800 shadow-sm flex items-center gap-8 group hover:shadow-xl transition-all">
+       <div className={`w-20 h-20 rounded-[2.2rem] flex items-center justify-center ${bgColors[color] || 'bg-slate-50'} group-hover:scale-110 transition-transform`}>
+          {icon}
+       </div>
+       <div>
+          <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{label}</p>
+          <p className="text-4xl font-black text-slate-900 dark:text-white tracking-tighter mt-1">{value}</p>
+       </div>
+    </div>
+  );
+}
+
+function TaskCard({ task, user, users, onAdvance, onDelete, onEdit }: any) {
+  const currentIndex = StatusOrder.indexOf(task.status);
+  const nextStatus = StatusOrder[currentIndex + 1];
+  const isFinished = task.status === TaskStatus.TERMINADO;
+  const isClosed = task.status === TaskStatus.FECHADO;
+  const isEmployee = user.role === UserRole.EMPLOYEE;
+  const isMyTask = task.responsibleId === user.id;
+  const respName = users?.find((u: User) => u.id === task.responsibleId)?.name;
+  const extra = task.intervenientes?.length ? ` +${task.intervenientes.length}` : '';
+
+  return (
+    <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-[3.5rem] p-6 sm:p-10 border border-slate-100 dark:border-slate-800 shadow-sm hover:shadow-2xl transition-all group flex flex-col h-full relative overflow-hidden">
+       {task.status === TaskStatus.ATRASADA && <div className="absolute top-0 right-0 w-24 sm:w-32 h-24 sm:h-32 bg-rose-500/10 rounded-full -mr-12 sm:-mr-16 -mt-12 sm:-mt-16 flex items-end justify-start p-4 sm:p-8"><AlertTriangle className="text-rose-500" size={20} /></div>}
+       
+       <div className="flex justify-between items-start mb-4 sm:mb-8">
+          <span className={`px-3 sm:px-5 py-1.5 sm:py-2 rounded-full text-[8px] sm:text-[9px] font-black uppercase tracking-widest ${STATUS_COLORS[task.status]}`}>
+             {task.status}
+          </span>
+          {user.role === UserRole.ADMIN && (
+             <div className="flex gap-1">
+               {onEdit && <button onClick={onEdit} className="p-2 text-slate-300 hover:text-[#10b981] transition-colors" title="Editar"><Pencil size={16}/></button>}
+               <button onClick={onDelete} className="p-2 text-slate-300 hover:text-rose-500 transition-colors" title="Eliminar"><Trash2 size={16}/></button>
+             </div>
+          )}
+       </div>
+       
+       <div className="flex-1 space-y-3 sm:space-y-4">
+          <h3 className="text-lg sm:text-2xl font-black tracking-tight leading-tight group-hover:text-[#10b981] transition-colors">{task.title}</h3>
+          <p className="text-xs sm:text-sm text-slate-400 font-medium leading-relaxed line-clamp-3">{task.description}</p>
+          {respName && <p className="text-[10px] font-bold text-slate-500 uppercase">Responsável: {respName}{extra}</p>}
+       </div>
+
+       <div className="mt-6 sm:mt-10 pt-6 sm:pt-8 border-t border-slate-50 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+          <div className="flex items-center gap-2 text-slate-400">
+             <Calendar size={14}/>
+             <span className="text-[10px] font-black uppercase tracking-widest">Prazo: {new Date(task.deliveryDate).toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
+          </div>
+          {!isClosed && nextStatus && (isMyTask || !isEmployee) && (
+            <button 
+              disabled={isFinished && isEmployee}
+              onClick={onAdvance}
+              className={`flex-1 sm:max-w-[140px] py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-[9px] font-black uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-2
+                ${isFinished ? 'bg-[#10b981] text-white shadow-emerald-500/20' : 'bg-slate-900 dark:bg-slate-700 text-white hover:bg-[#10b981]'}`}
+            >
+               {isFinished ? (user.role === UserRole.ADMIN ? <Check size={14}/> : <ShieldCheck size={14}/>) : <ArrowRight size={14}/>}
+               {isFinished ? (user.role === UserRole.ADMIN ? 'Validar' : 'Finalizada') : 'Avançar'}
+            </button>
+          )}
+          {isClosed && <div className="text-[#10b981] flex items-center gap-1 font-black text-[9px] uppercase tracking-widest"><CheckCircle2 size={16}/> Fechada</div>}
+       </div>
+    </div>
+  );
+}
