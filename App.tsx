@@ -98,6 +98,15 @@ export default function App() {
     setTasks(savedTasks);
     setUsers(savedUsers);
     setSystemActivities(savedActivities);
+    try {
+      const auth = JSON.parse(localStorage.getItem('gestora_auth') || 'null');
+      if (auth && auth.userId) {
+        const found = savedUsers.find((u: any) => u.id === auth.userId);
+        if (found) { setUser(found); setView('app'); }
+      }
+    } catch (e) {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -120,6 +129,14 @@ export default function App() {
   const saveUsers = (newUsers: User[]) => {
     setUsers(newUsers);
     localStorage.setItem('gestora_users', JSON.stringify(newUsers));
+  };
+
+  const addComment = (taskId: string, text: string) => {
+    if (!user) return;
+    const comment = { id: 'C-' + Math.random().toString(36).substr(2, 6).toUpperCase(), userId: user.id, userName: user.name, text, timestamp: new Date().toISOString() };
+    const updatedTasks = tasks.map(t => t.id === taskId ? { ...t, comments: [...(t.comments || []), comment], updatedAt: new Date().toISOString() } : t);
+    saveTasks(updatedTasks);
+    addSystemActivity({ userId: user.id, userName: user.name, action: 'commented', entityType: 'task', entityId: taskId, entityTitle: tasks.find(x => x.id === taskId)?.title });
   };
 
   const handleDeleteTask = (task: Task) => {
@@ -230,9 +247,16 @@ export default function App() {
           <form className="space-y-8" onSubmit={(e) => {
             e.preventDefault();
             const email = (e.target as any).email.value;
-            const found = users.find(u => u.email === email);
-            if (found) { setUser(found); setView('app'); }
-            else alert('Acesso negado. Credenciais inválidas.');
+            const password = (e.target as any).password.value;
+            const found = users.find(u => u.email === email && (u as any).password === password);
+            if (found) {
+              const token = Math.random().toString(36).substr(2, 12);
+              localStorage.setItem('gestora_auth', JSON.stringify({ token, userId: found.id }));
+              const updatedUsers = users.map(u => u.id === found.id ? { ...u, lastLogin: new Date().toISOString() } : u);
+              saveUsers(updatedUsers);
+              setUser({ ...found, lastLogin: new Date().toISOString() });
+              setView('app');
+            } else alert('Acesso negado. Credenciais inválidas.');
           }}>
             <div className="space-y-3">
               <label className="text-[11px] font-black uppercase text-emerald-400 tracking-widest ml-1">E-mail Corporativo</label>
@@ -275,7 +299,7 @@ export default function App() {
   );
 
   const LandingPage = () => (
-    <div className="min-h-screen bg-white font-sans flex flex-col">
+    <div className="landing-multi-font min-h-screen bg-white flex flex-col">
       <nav className="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-xl z-[100] border-b border-slate-200/60 h-16 sm:h-[72px]">
         <div className="max-w-6xl mx-auto px-5 sm:px-8 h-full flex items-center justify-between">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('landing')}>
@@ -481,6 +505,7 @@ export default function App() {
                     onAdvance={() => handleAdvanceStatus(tk)} 
                     onDelete={() => handleDeleteTask(tk)}
                     onEdit={user?.role === UserRole.ADMIN ? () => { setEditingTaskId(tk.id); setIsTaskModalOpen(true); } : undefined}
+                    onAddComment={(text: string) => addComment(tk.id, text)}
                   />
                 )) : (
                   <div className="col-span-full py-20 text-center space-y-6">
@@ -624,7 +649,7 @@ export default function App() {
                   addSystemActivity({ userId: user!.id, userName: user!.name, action: 'updated', entityType: 'task', entityId: editTask.id, entityTitle: fd.get('title') as string });
                   setEditingTaskId(null); setIsTaskModalOpen(false);
                 } else {
-                  const newTask: Task = { id: 'T-' + Math.random().toString(36).substr(2, 6).toUpperCase(), title: fd.get('title') as string, description: fd.get('description') as string, startDate: start, deadlineValue: val, deadlineType: type, deliveryDate: delivery.toISOString(), responsibleId: ids[0], intervenientes: ids.slice(1), status: TaskStatus.ABERTO, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                  const newTask: Task = { id: 'T-' + Math.random().toString(36).substr(2, 6).toUpperCase(), title: fd.get('title') as string, description: fd.get('description') as string, startDate: start, deadlineValue: val, deadlineType: type, deliveryDate: delivery.toISOString(), responsibleId: ids[0], intervenientes: ids.slice(1), status: TaskStatus.ABERTO, comments: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
                   saveTasks([newTask, ...tasks]);
                   addSystemActivity({ userId: user!.id, userName: user!.name, action: 'created', entityType: 'task', entityId: newTask.id, entityTitle: newTask.title });
                   setIsTaskModalOpen(false);
@@ -756,7 +781,7 @@ function StatCard({ icon, label, value, color }: any) {
   );
 }
 
-function TaskCard({ task, user, users, onAdvance, onDelete, onEdit }: any) {
+function TaskCard({ task, user, users, onAdvance, onDelete, onEdit, onAddComment }: any) {
   const currentIndex = StatusOrder.indexOf(task.status);
   const nextStatus = StatusOrder[currentIndex + 1];
   const isFinished = task.status === TaskStatus.TERMINADO;
@@ -765,6 +790,7 @@ function TaskCard({ task, user, users, onAdvance, onDelete, onEdit }: any) {
   const isMyTask = task.responsibleId === user.id;
   const respName = users?.find((u: User) => u.id === task.responsibleId)?.name;
   const extra = task.intervenientes?.length ? ` +${task.intervenientes.length}` : '';
+  const [commentText, setCommentText] = useState('');
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-[3.5rem] p-6 sm:p-10 border border-slate-100 dark:border-slate-800 shadow-sm hover:shadow-2xl transition-all group flex flex-col h-full relative overflow-hidden">
@@ -786,6 +812,25 @@ function TaskCard({ task, user, users, onAdvance, onDelete, onEdit }: any) {
           <h3 className="text-lg sm:text-2xl font-black tracking-tight leading-tight group-hover:text-[#10b981] transition-colors">{task.title}</h3>
           <p className="text-xs sm:text-sm text-slate-400 font-medium leading-relaxed line-clamp-3">{task.description}</p>
           {respName && <p className="text-[10px] font-bold text-slate-500 uppercase">Responsável: {respName}{extra}</p>}
+
+          <div className="pt-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold text-slate-500">Comentários ({task.comments?.length || 0})</p>
+            </div>
+            <div className="mt-2 space-y-2">
+              {(task.comments || []).slice(-3).map((c: any) => (
+                <div key={c.id} className="text-sm text-slate-600 bg-slate-50 dark:bg-slate-800 p-2 rounded-md">
+                  <span className="font-bold text-slate-800 dark:text-white mr-2">{c.userName}:</span>
+                  <span className="text-slate-600 dark:text-slate-300">{c.text}</span>
+                  <div className="text-[10px] text-slate-400 mt-1">{new Date(c.timestamp).toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-3">
+              <input value={commentText} onChange={e => setCommentText(e.target.value)} placeholder="Adicionar comentário..." className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 outline-none" />
+              <button onClick={() => { if (commentText.trim()) { onAddComment && onAddComment(commentText.trim()); setCommentText(''); } }} className="px-4 py-2 rounded-xl bg-[#10b981] text-white font-bold">Comentar</button>
+            </div>
+          </div>
        </div>
 
        <div className="mt-6 sm:mt-10 pt-6 sm:pt-8 border-t border-slate-50 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">

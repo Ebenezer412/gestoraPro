@@ -47,6 +47,7 @@ export interface Task {
   closedAt?: string;
   validatedAt?: string;
   reopenedAt?: string;
+  comments?: Comment[];
 }
 
 export interface Notification {
@@ -97,12 +98,20 @@ export interface SystemActivity {
   id: string;
   userId: string;
   userName: string;
-  action: 'created' | 'updated' | 'deleted' | 'status_changed';
+  action: 'created' | 'updated' | 'deleted' | 'status_changed' | 'commented';
   entityType: 'task';
   entityId: string;
   entityTitle?: string;
   fromStatus?: string;
   toStatus?: string;
+  timestamp: string;
+}
+
+export interface Comment {
+  id: string;
+  userId: string;
+  userName: string;
+  text: string;
   timestamp: string;
 }
 

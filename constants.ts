@@ -9,7 +9,7 @@ export const TRANSLATIONS = {
     contracts: 'Contratos',
     clients: 'Clientes',
     articles: 'Artigos',
-    events: 'Actividades',
+    events: 'Atividades',
     tasks: 'Gestão de Tarefas',
     invoicing: 'Faturação',
     nonConformities: 'Conformidades',
@@ -265,9 +265,9 @@ export const TRANSLATIONS = {
 };
 
 export const MOCK_USERS: any[] = [
-  { id: 'u-admin', name: 'Luciano Alfredo', email: 'admin@gestora.com', role: UserRole.ADMIN, position: 'Diretor Geral', department: 'Diretoria' },
-  { id: 'u-emp1', name: 'João Silva', email: 'joao@gestora.com', role: UserRole.EMPLOYEE, position: 'Analista Sênior', department: 'TI' },
-  { id: 'u-emp2', name: 'Ana Costa', email: 'ana@gestora.com', role: UserRole.EMPLOYEE, position: 'Coordenadora de Projetos', department: 'Operações' }
+  { id: 'u-admin', name: 'Luciano Alfredo', email: 'admin@gestora.com', password: 'adminpass', role: UserRole.ADMIN, position: 'Diretor Geral', department: 'Diretoria' },
+  { id: 'u-emp1', name: 'João Silva', email: 'joao@gestora.com', password: 'joaopass', role: UserRole.EMPLOYEE, position: 'Analista Sênior', department: 'TI' },
+  { id: 'u-emp2', name: 'Ana Costa', email: 'ana@gestora.com', password: 'anapass', role: UserRole.EMPLOYEE, position: 'Coordenadora de Projetos', department: 'Operações' }
 ];
 
 export const INITIAL_TASKS: any[] = [
@@ -282,6 +282,7 @@ export const INITIAL_TASKS: any[] = [
     responsibleId: 'u-emp1',
     intervenientes: ['u-emp2'],
     status: TaskStatus.ABERTO,
+    comments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   },
@@ -296,6 +297,7 @@ export const INITIAL_TASKS: any[] = [
     responsibleId: 'u-emp1',
     intervenientes: ['u-emp2'],
     status: TaskStatus.POR_INICIAR,
+    comments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   },
@@ -310,6 +312,7 @@ export const INITIAL_TASKS: any[] = [
     responsibleId: 'u-emp1',
     intervenientes: ['u-emp2', 'u-admin'],
     status: TaskStatus.EM_PROGRESSO,
+    comments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   },
@@ -324,6 +327,7 @@ export const INITIAL_TASKS: any[] = [
     responsibleId: 'u-emp2',
     intervenientes: ['u-emp1'],
     status: TaskStatus.TERMINADO,
+    comments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   },
@@ -338,6 +342,7 @@ export const INITIAL_TASKS: any[] = [
     responsibleId: 'u-emp2',
     intervenientes: ['u-emp1', 'u-admin'],
     status: TaskStatus.FECHADO,
+    comments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     closedAt: new Date().toISOString()
@@ -353,6 +358,7 @@ export const INITIAL_TASKS: any[] = [
     responsibleId: 'u-emp1',
     intervenientes: ['u-emp2'],
     status: TaskStatus.ATRASADA,
+    comments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   }
